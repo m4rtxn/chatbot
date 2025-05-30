@@ -1,5 +1,5 @@
 # Use Python 3.11 image from Docker Hub as the base image
-FROM python:3.11-buster
+FROM python:3.11-slim
 
 # Install poetry, a dependency management tool, at a specific version
 RUN pip install poetry==1.5.1

@@ -117,7 +117,7 @@ def simple_extractor(html: str) -> str:
 
 
 def load_custom_stock():
-    """Load all CSV files from the data directory.
+    """Load all CSV files from the data directory with enhanced date handling and validation.
 
     Returns:
         list: The loaded documents from all CSV files in the data directory.
@@ -143,6 +143,11 @@ def load_custom_stock():
                 "description",
                 "category",
                 "costs",
+                "start_date",  # Added for better date handling
+                "end_date",    # Added for better date handling
+                "is_recurring", # Added for recurring events
+                "recurrence_pattern", # Added for recurring events pattern
+                "time_zone",   # Added for timezone support
             ]
             
             # Try to detect fieldnames from the CSV file
@@ -151,11 +156,96 @@ def load_custom_stock():
                 header = next(reader, None)
                 if header:
                     fieldnames = header
-            
-            docs = CSVLoader(
+
+            def validate_and_transform_dates(row):
+                """Validate and transform date-related fields in the row."""
+                from datetime import datetime
+                import pytz
+                
+                # Date formats to try
+                date_formats = [
+                    "%Y-%m-%d",
+                    "%d/%m/%Y",
+                    "%m/%d/%Y",
+                    "%Y/%m/%d",
+                    "%d-%m-%Y",
+                    "%m-%d-%Y",
+                ]
+
+                def parse_date(date_str):
+                    if not date_str:
+                        return None
+                    
+                    for fmt in date_formats:
+                        try:
+                            return datetime.strptime(date_str.strip(), fmt)
+                        except ValueError:
+                            continue
+                    return None
+
+                # Process dates field
+                if row.get('dates'):
+                    dates = row['dates'].split(',')
+                    parsed_dates = []
+                    for date in dates:
+                        parsed_date = parse_date(date)
+                        if parsed_date:
+                            parsed_dates.append(parsed_date.strftime("%Y-%m-%d"))
+                    row['dates'] = ','.join(parsed_dates) if parsed_dates else row['dates']
+
+                # Process start_date and end_date
+                for field in ['start_date', 'end_date']:
+                    if row.get(field):
+                        parsed_date = parse_date(row[field])
+                        if parsed_date:
+                            row[field] = parsed_date.strftime("%Y-%m-%d")
+
+                # Validate timezone if present
+                if row.get('time_zone'):
+                    try:
+                        pytz.timezone(row['time_zone'])
+                    except pytz.exceptions.UnknownTimeZoneError:
+                        row['time_zone'] = 'UTC'  # Default to UTC if invalid
+
+                # Validate recurrence pattern if event is recurring
+                if row.get('is_recurring') and row.get('is_recurring').lower() == 'true':
+                    valid_patterns = ['daily', 'weekly', 'monthly', 'yearly']
+                    if not row.get('recurrence_pattern') or row['recurrence_pattern'].lower() not in valid_patterns:
+                        row['recurrence_pattern'] = 'none'
+
+                return row
+
+            # Custom CSV loader with data validation
+            class ValidatedCSVLoader(CSVLoader):
+                def load(self):
+                    docs = super().load()
+                    validated_docs = []
+                    for doc in docs:
+                        try:
+                            # Convert the string content to a dictionary
+                            content_dict = {}
+                            for line in doc.page_content.split('\n'):
+                                if ':' in line:
+                                    key, value = line.split(':', 1)
+                                    content_dict[key.strip()] = value.strip()
+                            
+                            # Apply validation and transformation
+                            validated_content = validate_and_transform_dates(content_dict)
+                            
+                            # Convert back to string format
+                            formatted_content = '\n'.join([f"{k}: {v}" for k, v in validated_content.items()])
+                            doc.page_content = formatted_content
+                            validated_docs.append(doc)
+                        except Exception as e:
+                            logger.error(f"Error processing document: {str(e)}")
+                            # Keep the original document if validation fails
+                            validated_docs.append(doc)
+                    return validated_docs
+
+            docs = ValidatedCSVLoader(
                 file_path=csv_file,
                 csv_args={
-                    "delimiter": ";",
+                    "delimiter": ",",
                     "fieldnames": fieldnames,
                 },
             ).load()
